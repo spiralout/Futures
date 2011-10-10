@@ -9,25 +9,23 @@
  * @license http://www.opensource.org/licenses/BSD-3-Clause BSD 3-Clause
  * @link https://github.com/spiralout/Futures
  */
+
+require 'FutureMessageQueueInterface.php';
+
 class Future
 {
-    /** max value size */
-    const SIZE = 100000;
-
-    /** unique key for the Futures message queue */
-    const MSG_QUEUE_KEY = 0xFAC3;
-
     /**
      * Constructor
      *
      * @var Closure $func
      * @var bool $autoStart
      */
-    function __construct(Closure $func, $autoStart = true)
+    function __construct(Closure $func, FutureMessageQueueInterface $queue, $autoStart = true)
     {
         self::$futureCount++;
 
         $this->func = $func;        
+        $this->queue = $queue;
         $this->autoStart = $autoStart;
 
         $this->initMessageQueue();
@@ -53,7 +51,7 @@ class Future
     function get()
     {           
         if (!$this->completed) {
-            if (!(msg_receive($this->mqid, $this->messageType, $msgType, self::SIZE, $this->value, true, 0, $error))) {
+            if (!($this->value = $this->queue->receive($this->messageType))) {
                 return false;
             }
 
@@ -73,7 +71,7 @@ class Future
     function getNoWait()
     {
         if (!$this->completed) { 
-            if (!msg_receive($this->mqid, $this->messageType, $msgType, self::SIZE, $this->value, true, MSG_IPC_NOWAIT, $error)) {
+            if (!($this->value = $this->queue->receiveNoWait($this->messageType))) {
                 return false;
             }
 
@@ -117,7 +115,7 @@ class Future
                 $value = $e;
             }
         
-            if (!msg_send($this->mqid, $this->messageType, $value, true, true, $error)) {
+            if (!$this->queue->send($value, $this->messageType)) {
                 $this->cleanUp();
             }
             
@@ -133,18 +131,19 @@ class Future
         self::$futureCount--;
 
         if (self::$futureCount == 0) {
-            msg_remove_queue($this->mqid);
+            $this->queue->shutdown();
         }
     }
 
     /**
      * Generate a unique message type key
+     * has to be an int
      *
      * @return int
      */
     private function getMessageType()
     {
-        return floor(microtime(true) * 1000000 + rand(0, 1000));
+        return floor(microtime(true) * 100000 + rand(0, 1000));
     }
 
     /**
@@ -153,11 +152,11 @@ class Future
     private function initMessageQueue()
     {
         $this->messageType = $this->getMessageType();
-
-        if (!($this->mqid = msg_get_queue(self::MSG_QUEUE_KEY))) {
-            throw new Exception('Could not create message queue with key '. self::MSG_QUEUE_KEY);
-        }
+        $this->queue->init();
     }
+
+    /** @var FutureMessageQueueInterface */
+    private $queue;
 
     /** @var bool */
     private $completed = false;
@@ -168,9 +167,6 @@ class Future
     /** @var mixed */
     private $value;
 
-    /** @var resource */
-    private $mqid;
-
     /** @var int */
     private $pid;
 
@@ -178,7 +174,7 @@ class Future
     private $func;
 
     /** @var int */
-    private $msgType;
+    private $messageType;
 
     /** @staticvar $int */
     static $futureCount = 0;
